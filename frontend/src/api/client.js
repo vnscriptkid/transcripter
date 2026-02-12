@@ -1,4 +1,5 @@
-const API_BASE = '/api';
+// Use environment variable for API URL in production, fallback to relative path
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 /**
  * Upload a video file for transcription
