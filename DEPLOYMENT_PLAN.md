@@ -63,24 +63,17 @@ Create `backend/Dockerfile` and `frontend/Dockerfile` (or use Railway's auto-det
 3. **Select your repository**
 4. **Configure Backend Service**:
    - Root Directory: `backend`
-   - Build Command: `pip install -r requirements.txt`
-   - Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
    - Environment Variables:
      - `OPENAI_API_KEY` = (your OpenAI key)
      - `PORT` = (auto-set by Railway)
-5. **Add FFmpeg**: Railway will need FFmpeg installed
-   - Add to build command: `apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt`
-   - Or use Railway's nixpacks with custom config
 
 ### Step 3: Deploy Frontend to Railway
 
 1. **Add New Service** → "GitHub Repo" (same repo)
 2. **Configure Frontend Service**:
    - Root Directory: `frontend`
-   - Build Command: `npm install && npm run build`
-   - Start Command: `npm run preview` (or serve static files)
    - Environment Variables:
-     - `VITE_API_URL` = (backend Railway URL)
+     - `VITE_API_URL` = (backend Railway URL + /api)
 3. **Update Frontend API Client**:
    - Modify `frontend/src/api/client.js` to use `import.meta.env.VITE_API_URL || '/api'`
 
