@@ -2,6 +2,7 @@ from .audio import AudioExtractor, AudioExtractionError
 from .transcription import TranscriptionService, TranscriptionError
 from .whisper_api import WhisperAPIService
 from .storage import StorageService
+from .auth import AuthService
 
 __all__ = [
     "AudioExtractor",
@@ -10,4 +11,5 @@ __all__ = [
     "TranscriptionError",
     "WhisperAPIService",
     "StorageService",
+    "AuthService",
 ]

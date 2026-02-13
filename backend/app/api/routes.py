@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
+from app.api.deps import get_current_user
+from app.models.database import User, Transcript as TranscriptModel
+from sqlalchemy import select as sa_select
 from app.models.schemas import (
     TranscriptionStatus,
     TranscriptResponse,
@@ -122,6 +125,7 @@ async def upload_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Upload a video file for transcription.
@@ -147,7 +151,7 @@ async def upload_video(
     # Generate ID and create transcript entry
     storage = StorageService(db=db)
     transcript_id = storage.generate_id()
-    await storage.create_transcript(transcript_id, file.filename)
+    await storage.create_transcript(transcript_id, file.filename, user_id=user.id)
     
     # Save uploaded file
     video_path = settings.uploads_dir / f"{transcript_id}.{extension}"
@@ -187,6 +191,7 @@ async def upload_folder(
     files: list[UploadFile] = File(...),
     relative_paths: str = Form(...),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Upload a folder of video files for transcription.
@@ -237,6 +242,7 @@ async def upload_folder(
             filename,
             relative_path=rel_path,
             batch_id=batch_id,
+            user_id=user.id,
         )
 
         video_path = settings.uploads_dir / f"{transcript_id}.{extension}"
@@ -278,6 +284,7 @@ async def list_transcripts(
     limit: int = 20,
     cursor: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """List transcript groups with cursor-based pagination."""
     from datetime import datetime as dt
@@ -293,6 +300,7 @@ async def list_transcripts(
     groups, next_cursor, has_more = await storage.list_transcript_groups(
         limit=max(1, min(limit, 100)),
         cursor=cursor_dt,
+        user_id=user.id,
     )
 
     return PaginatedTranscriptGroupsResponse(
@@ -303,10 +311,13 @@ async def list_transcripts(
 
 
 @router.get("/transcripts/status/in-progress", response_model=InProgressResponse)
-async def list_in_progress(db: AsyncSession = Depends(get_db)):
+async def list_in_progress(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Get status of all in-progress transcripts (for polling)."""
     storage = StorageService(db=db)
-    items = await storage.list_in_progress()
+    items = await storage.list_in_progress(user_id=user.id)
     return InProgressResponse(
         transcripts=[InProgressStatusItem(**item) for item in items]
     )
@@ -316,13 +327,14 @@ async def list_in_progress(db: AsyncSession = Depends(get_db)):
 async def download_folder_transcripts(
     batch_id: str,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Download all transcripts of a folder upload as a zip archive.
     Preserves original folder structure; each transcript is a .txt file.
     """
     storage = StorageService(db=db)
-    items = await storage.list_transcripts_by_batch_id_with_content(batch_id)
+    items = await storage.list_transcripts_by_batch_id_with_content(batch_id, user_id=user.id)
 
     if not items:
         raise HTTPException(
@@ -348,12 +360,24 @@ async def download_folder_transcripts(
 
 
 @router.get("/transcripts/{transcript_id}", response_model=TranscriptResponse)
-async def get_transcript(transcript_id: str, db: AsyncSession = Depends(get_db)):
+async def get_transcript(
+    transcript_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Get a specific transcript with its content."""
     storage = StorageService(db=db)
     metadata = await storage.get_metadata(transcript_id)
-    
+
     if metadata is None:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+
+    # Ownership check
+    result = await db.execute(
+        sa_select(TranscriptModel.user_id).where(TranscriptModel.id == transcript_id)
+    )
+    row = result.one_or_none()
+    if row and row.user_id != user.id:
         raise HTTPException(status_code=404, detail="Transcript not found")
     
     transcript = None
@@ -367,14 +391,26 @@ async def get_transcript(transcript_id: str, db: AsyncSession = Depends(get_db))
 
 
 @router.get("/transcripts/{transcript_id}/status", response_model=StatusResponse)
-async def get_transcript_status(transcript_id: str, db: AsyncSession = Depends(get_db)):
+async def get_transcript_status(
+    transcript_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Get the status of a transcript."""
     storage = StorageService(db=db)
     metadata = await storage.get_metadata(transcript_id)
-    
+
     if metadata is None:
         raise HTTPException(status_code=404, detail="Transcript not found")
-    
+
+    # Ownership check
+    result = await db.execute(
+        sa_select(TranscriptModel.user_id).where(TranscriptModel.id == transcript_id)
+    )
+    row = result.one_or_none()
+    if row and row.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+
     return StatusResponse(
         id=transcript_id,
         status=metadata.status,

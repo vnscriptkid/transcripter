@@ -1,6 +1,68 @@
 // Use environment variable for API URL in production, fallback to relative path
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
+// --- Auth token management ---
+
+let authToken = localStorage.getItem('auth_token');
+
+export function setAuthToken(token) {
+  authToken = token;
+  if (token) {
+    localStorage.setItem('auth_token', token);
+  } else {
+    localStorage.removeItem('auth_token');
+  }
+}
+
+export function getAuthToken() {
+  return authToken;
+}
+
+function authHeaders() {
+  if (!authToken) return {};
+  return { 'Authorization': `Bearer ${authToken}` };
+}
+
+/**
+ * Wrapper around fetch that attaches auth headers and handles 401 expiry.
+ */
+async function authenticatedFetch(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: { ...options.headers, ...authHeaders() },
+  });
+  if (response.status === 401 && authToken) {
+    setAuthToken(null);
+    window.dispatchEvent(new Event('auth:expired'));
+  }
+  return response;
+}
+
+// --- Auth API calls ---
+
+export async function loginWithGoogle(googleToken) {
+  const response = await fetch(`${API_BASE}/auth/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: googleToken }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Login failed');
+  }
+  return response.json();
+}
+
+export async function getCurrentUser() {
+  const response = await authenticatedFetch(`${API_BASE}/auth/me`);
+  if (!response.ok) {
+    throw new Error('Not authenticated');
+  }
+  return response.json();
+}
+
+// --- Existing API calls (updated with auth) ---
+
 /**
  * Upload a video file for transcription
  * @param {File} file - The video file to upload
@@ -10,17 +72,17 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 export async function uploadVideo(file, onProgress) {
   const formData = new FormData();
   formData.append('file', file);
-  
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    
+
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable && onProgress) {
         const progress = Math.round((event.loaded / event.total) * 100);
         onProgress(progress);
       }
     });
-    
+
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(JSON.parse(xhr.responseText));
@@ -33,12 +95,15 @@ export async function uploadVideo(file, onProgress) {
         }
       }
     });
-    
+
     xhr.addEventListener('error', () => {
       reject(new Error('Network error'));
     });
-    
+
     xhr.open('POST', `${API_BASE}/upload`);
+    if (authToken) {
+      xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+    }
     xhr.send(formData);
   });
 }
@@ -85,6 +150,9 @@ export async function uploadFolder(files, relativePaths, onProgress) {
     });
 
     xhr.open('POST', `${API_BASE}/upload-folder`);
+    if (authToken) {
+      xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+    }
     xhr.send(formData);
   });
 }
@@ -100,7 +168,7 @@ export async function listTranscriptGroups({ limit = 20, cursor = null } = {}) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) params.set('cursor', cursor);
 
-  const response = await fetch(`${API_BASE}/transcripts?${params}`);
+  const response = await authenticatedFetch(`${API_BASE}/transcripts?${params}`);
 
   if (!response.ok) {
     throw new Error('Failed to fetch transcripts');
@@ -115,15 +183,15 @@ export async function listTranscriptGroups({ limit = 20, cursor = null } = {}) {
  * @returns {Promise<{metadata: object, transcript: object|null}>}
  */
 export async function getTranscript(id) {
-  const response = await fetch(`${API_BASE}/transcripts/${id}`);
-  
+  const response = await authenticatedFetch(`${API_BASE}/transcripts/${id}`);
+
   if (!response.ok) {
     if (response.status === 404) {
       throw new Error('Transcript not found');
     }
     throw new Error('Failed to fetch transcript');
   }
-  
+
   return response.json();
 }
 
@@ -133,7 +201,7 @@ export async function getTranscript(id) {
  * @param {string} batchId - Batch ID from folder upload
  */
 export async function downloadFolderTranscripts(batchId) {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     `${API_BASE}/transcripts/folder/${batchId}/download`
   );
 
@@ -165,7 +233,7 @@ export async function downloadFolderTranscripts(batchId) {
  * @returns {Promise<{id: string, status: string, error: string|null}>}
  */
 export async function getTranscriptStatus(id) {
-  const response = await fetch(`${API_BASE}/transcripts/${id}/status`);
+  const response = await authenticatedFetch(`${API_BASE}/transcripts/${id}/status`);
 
   if (!response.ok) {
     throw new Error('Failed to fetch status');
@@ -179,7 +247,7 @@ export async function getTranscriptStatus(id) {
  * @returns {Promise<{transcripts: Array<{id: string, status: string, batch_id: string|null}>}>}
  */
 export async function getInProgressStatuses() {
-  const response = await fetch(`${API_BASE}/transcripts/status/in-progress`);
+  const response = await authenticatedFetch(`${API_BASE}/transcripts/status/in-progress`);
 
   if (!response.ok) {
     throw new Error('Failed to fetch in-progress statuses');
@@ -190,7 +258,7 @@ export async function getInProgressStatuses() {
 
 /**
  * Format duration in seconds to MM:SS
- * @param {number} seconds 
+ * @param {number} seconds
  * @returns {string}
  */
 export function formatDuration(seconds) {

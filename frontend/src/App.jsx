@@ -3,9 +3,15 @@ import UploadForm from './components/UploadForm';
 import FolderUploadForm from './components/FolderUploadForm';
 import TranscriptList from './components/TranscriptList';
 import TranscriptViewer from './components/TranscriptViewer';
+import LoginButton from './components/LoginButton';
+import LoginModal from './components/LoginModal';
+import { useAuth } from './hooks/useAuth';
 import { listTranscriptGroups, getTranscript, getInProgressStatuses } from './api/client';
 
 function App() {
+  const { user, isLoading: isAuthLoading, login, logout } = useAuth();
+  const [showLoginModal, setShowLoginModal] = useState(false);
+
   const [groups, setGroups] = useState([]);
   const [nextCursor, setNextCursor] = useState(null);
   const [hasMore, setHasMore] = useState(false);
@@ -16,8 +22,13 @@ function App() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
 
-  // Fetch initial page of groups
+  // Fetch initial page of groups (only when logged in)
   const fetchInitialGroups = useCallback(async () => {
+    if (!user) {
+      setGroups([]);
+      setIsLoadingList(false);
+      return;
+    }
     try {
       const data = await listTranscriptGroups({ limit: 20 });
       setGroups(data.groups);
@@ -25,15 +36,22 @@ function App() {
       setHasMore(data.has_more);
     } catch (err) {
       console.error('Failed to fetch transcripts:', err);
+      setGroups([]);
     } finally {
       setIsLoadingList(false);
     }
-  }, []);
+  }, [user]);
 
-  // Initial load
+  // Re-fetch when auth state changes
   useEffect(() => {
-    fetchInitialGroups();
-  }, [fetchInitialGroups]);
+    if (!isAuthLoading) {
+      setIsLoadingList(true);
+      setSelectedId(null);
+      setSelectedTranscript(null);
+      setSelectedMetadata(null);
+      fetchInitialGroups();
+    }
+  }, [user, isAuthLoading, fetchInitialGroups]);
 
   // Load more groups (next page)
   const loadMore = useCallback(async () => {
@@ -53,7 +71,8 @@ function App() {
 
   // Poll for status updates on in-progress transcripts
   useEffect(() => {
-    // Collect in-progress transcript ids from current groups
+    if (!user) return;
+
     const inProgressIds = new Set();
     for (const group of groups) {
       for (const t of group.transcripts) {
@@ -70,34 +89,23 @@ function App() {
         const { transcripts: statuses } = await getInProgressStatuses();
         const statusMap = new Map(statuses.map(s => [s.id, s.status]));
 
-        // Check if any tracked transcript changed status
         let changed = false;
         for (const id of inProgressIds) {
           const newStatus = statusMap.get(id);
-          // If missing from in-progress list, it completed or failed
-          if (!newStatus) {
-            changed = true;
-            break;
-          }
-          // Check against current state
+          if (!newStatus) { changed = true; break; }
           for (const group of groups) {
             const t = group.transcripts.find(tr => tr.id === id);
-            if (t && t.status !== newStatus) {
-              changed = true;
-              break;
-            }
+            if (t && t.status !== newStatus) { changed = true; break; }
           }
           if (changed) break;
         }
 
         if (changed) {
-          // Re-fetch initial page to pick up updated statuses
           const data = await listTranscriptGroups({ limit: 20 });
           setGroups(data.groups);
           setNextCursor(data.next_cursor);
           setHasMore(data.has_more);
 
-          // Refresh selected transcript if it was processing
           if (selectedId && inProgressIds.has(selectedId)) {
             loadTranscript(selectedId);
           }
@@ -108,13 +116,11 @@ function App() {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [groups, selectedId]);
+  }, [groups, selectedId, user]);
 
-  // Load a specific transcript
   const loadTranscript = async (id) => {
     setSelectedId(id);
     setIsLoadingTranscript(true);
-
     try {
       const data = await getTranscript(id);
       setSelectedMetadata(data.metadata);
@@ -126,28 +132,80 @@ function App() {
     }
   };
 
-  // Handle upload completion (single file)
   const handleUploadComplete = (result) => {
     fetchInitialGroups();
     loadTranscript(result.id);
   };
 
-  // Handle folder upload completion
   const handleFolderUploadComplete = (result) => {
     fetchInitialGroups();
     const firstId = result.accepted_files?.[0]?.id;
     if (firstId) loadTranscript(firstId);
   };
 
+  const handleRequestLogin = () => setShowLoginModal(true);
+
+  const handleModalLogin = async (credentialResponse) => {
+    await login(credentialResponse);
+    setShowLoginModal(false);
+  };
+
+  if (isAuthLoading) {
+    return (
+      <div className="container">
+        <div className="card">
+          <div className="empty-state">
+            <div className="spinner"></div>
+            <p style={{ marginTop: '1rem' }}>Loading...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container">
       <header>
-        <h1>Video Transcriber</h1>
-        <p className="subtitle">Upload a video and get an AI-powered transcript</p>
+        <div className="header-row">
+          <div>
+            <h1>Video Transcriber</h1>
+            <p className="subtitle">Upload a video and get an AI-powered transcript</p>
+          </div>
+          {user ? (
+            <div className="user-menu">
+              {user.picture && (
+                <img
+                  src={user.picture}
+                  alt=""
+                  className="user-avatar"
+                  referrerPolicy="no-referrer"
+                />
+              )}
+              <span className="user-name">{user.name}</span>
+              <button
+                className="btn btn-secondary"
+                onClick={logout}
+                style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <LoginButton onSuccess={login} />
+          )}
+        </div>
       </header>
 
-      <UploadForm onUploadComplete={handleUploadComplete} />
-      <FolderUploadForm onUploadComplete={handleFolderUploadComplete} />
+      <UploadForm
+        onUploadComplete={handleUploadComplete}
+        user={user}
+        onRequestLogin={handleRequestLogin}
+      />
+      <FolderUploadForm
+        onUploadComplete={handleFolderUploadComplete}
+        user={user}
+        onRequestLogin={handleRequestLogin}
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '1.5rem' }}>
         <TranscriptList
@@ -174,6 +232,12 @@ function App() {
           />
         )}
       </div>
+
+      <LoginModal
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+        onLogin={handleModalLogin}
+      />
     </div>
   );
 }

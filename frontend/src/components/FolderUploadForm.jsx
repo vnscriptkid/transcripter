@@ -8,7 +8,7 @@ function getExtension(filename) {
   return parts.length > 1 ? parts.pop().toLowerCase() : '';
 }
 
-export default function FolderUploadForm({ onUploadComplete }) {
+export default function FolderUploadForm({ onUploadComplete, user, onRequestLogin }) {
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState(null);
@@ -18,6 +18,11 @@ export default function FolderUploadForm({ onUploadComplete }) {
   const handleFolderChange = async (e) => {
     const files = Array.from(e.target.files || []);
     e.target.value = '';
+
+    if (!user) {
+      onRequestLogin?.();
+      return;
+    }
 
     if (files.length === 0) {
       setError('No files found in folder');

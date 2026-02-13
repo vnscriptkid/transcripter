@@ -113,3 +113,23 @@ class InProgressStatusItem(BaseModel):
 class InProgressResponse(BaseModel):
     """Response for bulk in-progress status check."""
     transcripts: list[InProgressStatusItem]
+
+
+class GoogleLoginRequest(BaseModel):
+    """Request body for Google login."""
+    token: str
+
+
+class UserResponse(BaseModel):
+    """User information returned after login."""
+    id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+
+
+class LoginResponse(BaseModel):
+    """Response after successful login."""
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse

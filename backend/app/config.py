@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     # API settings
     max_file_size_mb: int = 500
     allowed_extensions: list[str] = ["mp4", "avi", "mov", "mkv", "webm", "m4v"]
+
+    # Google OAuth
+    google_client_id: str = ""
+
+    # JWT settings
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expiration_hours: int = 168  # 7 days
     
     class Config:
         env_file = ".env"

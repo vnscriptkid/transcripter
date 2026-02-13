@@ -29,6 +29,9 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/transcripter
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-168}
     volumes:
       - ./backend/uploads:/app/uploads
       - ./backend/transcripts:/app/transcripts
@@ -48,6 +51,7 @@ services:
       dockerfile: Dockerfile
       args:
         - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+        - VITE_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
     ports:
       - "80:80"
     depends_on:

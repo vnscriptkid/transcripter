@@ -3,7 +3,7 @@ import { uploadVideo } from '../api/client';
 
 const ALLOWED_EXTENSIONS = ['mp4', 'avi', 'mov', 'mkv', 'webm', 'm4v'];
 
-export default function UploadForm({ onUploadComplete }) {
+export default function UploadForm({ onUploadComplete, user, onRequestLogin }) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -20,6 +20,11 @@ export default function UploadForm({ onUploadComplete }) {
   };
 
   const handleFile = async (file) => {
+    if (!user) {
+      onRequestLogin?.();
+      return;
+    }
+
     const validationError = validateFile(file);
     if (validationError) {
       setError(validationError);

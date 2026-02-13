@@ -47,6 +47,7 @@ class StorageService:
         filename: str,
         relative_path: Optional[str] = None,
         batch_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> TranscriptMetadata:
         """
         Create a new transcript entry with pending status.
@@ -56,23 +57,22 @@ class StorageService:
             filename: Original filename of the uploaded video
             relative_path: Path relative to folder root (for folder uploads)
             batch_id: Groups transcripts from same folder upload
+            user_id: Owner user ID
 
         Returns:
             TranscriptMetadata for the new transcript
         """
         if self.db:
-            # Use provided session
             return await self._create_transcript_in_session(
-                self.db, transcript_id, filename, relative_path, batch_id
+                self.db, transcript_id, filename, relative_path, batch_id, user_id
             )
         else:
-            # Create new session
             from app.database import async_session_maker
             async with async_session_maker() as session:
                 return await self._create_transcript_in_session(
-                    session, transcript_id, filename, relative_path, batch_id
+                    session, transcript_id, filename, relative_path, batch_id, user_id
                 )
-    
+
     async def _create_transcript_in_session(
         self,
         session: AsyncSession,
@@ -80,16 +80,18 @@ class StorageService:
         filename: str,
         relative_path: Optional[str] = None,
         batch_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> TranscriptMetadata:
         """Internal method to create transcript within a session."""
         now = datetime.utcnow()
-        
+
         transcript = Transcript(
             id=transcript_id,
             filename=filename,
             status=TranscriptionStatus.PENDING.value,
             relative_path=relative_path,
             batch_id=batch_id,
+            user_id=user_id,
             created_at=now,
             updated_at=now,
         )
@@ -264,7 +266,7 @@ class StorageService:
         return [self._db_to_metadata(t) for t in transcripts]
 
     async def list_transcripts_by_batch_id_with_content(
-        self, batch_id: str
+        self, batch_id: str, user_id: Optional[str] = None,
     ) -> list[tuple[TranscriptMetadata, TranscriptResult]]:
         """
         List transcripts for a batch with their content (completed only).
@@ -272,25 +274,29 @@ class StorageService:
         """
         if self.db:
             return await self._list_by_batch_with_content_in_session(
-                self.db, batch_id
+                self.db, batch_id, user_id
             )
         from app.database import async_session_maker
         async with async_session_maker() as session:
             return await self._list_by_batch_with_content_in_session(
-                session, batch_id
+                session, batch_id, user_id
             )
 
     async def _list_by_batch_with_content_in_session(
         self,
         session: AsyncSession,
         batch_id: str,
+        user_id: Optional[str] = None,
     ) -> list[tuple[TranscriptMetadata, TranscriptResult]]:
         """Internal: list batch transcripts with content in session."""
-        result = await session.execute(
+        stmt = (
             select(Transcript)
             .where(Transcript.batch_id == batch_id)
             .order_by(Transcript.relative_path)
         )
+        if user_id is not None:
+            stmt = stmt.where(Transcript.user_id == user_id)
+        result = await session.execute(stmt)
         rows = result.scalars().all()
         out: list[tuple[TranscriptMetadata, TranscriptResult]] = []
         for t in rows:
@@ -307,6 +313,7 @@ class StorageService:
         self,
         limit: int = 20,
         cursor: Optional[datetime] = None,
+        user_id: Optional[str] = None,
     ) -> tuple[list[dict], Optional[str], bool]:
         """
         Return paginated transcript groups.
@@ -321,12 +328,12 @@ class StorageService:
         """
         if self.db:
             return await self._list_transcript_groups_in_session(
-                self.db, limit, cursor
+                self.db, limit, cursor, user_id
             )
         from app.database import async_session_maker
         async with async_session_maker() as session:
             return await self._list_transcript_groups_in_session(
-                session, limit, cursor
+                session, limit, cursor, user_id
             )
 
     async def _list_transcript_groups_in_session(
@@ -334,6 +341,7 @@ class StorageService:
         session: AsyncSession,
         limit: int,
         cursor: Optional[datetime],
+        user_id: Optional[str] = None,
     ) -> tuple[list[dict], Optional[str], bool]:
         # Step 1: find distinct groups with their representative created_at
         batch_groups = (
@@ -354,6 +362,10 @@ class StorageService:
             )
             .where(Transcript.batch_id.is_(None))
         )
+
+        if user_id is not None:
+            batch_groups = batch_groups.where(Transcript.user_id == user_id)
+            individual_groups = individual_groups.where(Transcript.user_id == user_id)
 
         groups_query = union_all(batch_groups, individual_groups).subquery("groups")
 
@@ -454,27 +466,28 @@ class StorageService:
         )
         return groups, next_cursor, has_more
 
-    async def list_in_progress(self) -> list[dict]:
+    async def list_in_progress(self, user_id: Optional[str] = None) -> list[dict]:
         """Return lightweight status info for all in-progress transcripts."""
         if self.db:
-            return await self._list_in_progress_in_session(self.db)
+            return await self._list_in_progress_in_session(self.db, user_id)
         from app.database import async_session_maker
         async with async_session_maker() as session:
-            return await self._list_in_progress_in_session(session)
+            return await self._list_in_progress_in_session(session, user_id)
 
     async def _list_in_progress_in_session(
-        self, session: AsyncSession
+        self, session: AsyncSession, user_id: Optional[str] = None,
     ) -> list[dict]:
         in_progress_statuses = [
             TranscriptionStatus.PENDING.value,
             TranscriptionStatus.EXTRACTING_AUDIO.value,
             TranscriptionStatus.TRANSCRIBING.value,
         ]
-        result = await session.execute(
-            select(Transcript.id, Transcript.status, Transcript.batch_id).where(
-                Transcript.status.in_(in_progress_statuses)
-            )
+        stmt = select(Transcript.id, Transcript.status, Transcript.batch_id).where(
+            Transcript.status.in_(in_progress_statuses)
         )
+        if user_id is not None:
+            stmt = stmt.where(Transcript.user_id == user_id)
+        result = await session.execute(stmt)
         return [
             {"id": row.id, "status": row.status, "batch_id": row.batch_id}
             for row in result.all()
