@@ -261,7 +261,47 @@ class StorageService:
         transcripts = result.scalars().all()
         
         return [self._db_to_metadata(t) for t in transcripts]
-    
+
+    async def list_transcripts_by_batch_id_with_content(
+        self, batch_id: str
+    ) -> list[tuple[TranscriptMetadata, TranscriptResult]]:
+        """
+        List transcripts for a batch with their content (completed only).
+        Returns list of (metadata, transcript_content) for building downloads.
+        """
+        if self.db:
+            return await self._list_by_batch_with_content_in_session(
+                self.db, batch_id
+            )
+        from app.database import async_session_maker
+        async with async_session_maker() as session:
+            return await self._list_by_batch_with_content_in_session(
+                session, batch_id
+            )
+
+    async def _list_by_batch_with_content_in_session(
+        self,
+        session: AsyncSession,
+        batch_id: str,
+    ) -> list[tuple[TranscriptMetadata, TranscriptResult]]:
+        """Internal: list batch transcripts with content in session."""
+        result = await session.execute(
+            select(Transcript)
+            .where(Transcript.batch_id == batch_id)
+            .order_by(Transcript.relative_path)
+        )
+        rows = result.scalars().all()
+        out: list[tuple[TranscriptMetadata, TranscriptResult]] = []
+        for t in rows:
+            if (
+                t.status == TranscriptionStatus.COMPLETED.value
+                and t.transcript_content is not None
+            ):
+                out.append(
+                    (self._db_to_metadata(t), TranscriptResult(**t.transcript_content))
+                )
+        return out
+
     def _db_to_metadata(self, transcript: Transcript) -> TranscriptMetadata:
         """Convert database model to Pydantic metadata model."""
         return TranscriptMetadata(

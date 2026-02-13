@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     # OpenAI API
     openai_api_key: str = ""
     
+    # Development: Use mock transcription service to avoid API costs
+    # Set USE_MOCK_TRANSCRIPTION=true in .env for local development
+    use_mock_transcription: bool = False
+    
     # Database - defaults to local PostgreSQL, can be overridden with DATABASE_URL env var
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/transcripter"
     

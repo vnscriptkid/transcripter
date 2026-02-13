@@ -1,10 +1,14 @@
+import io
 import json
 import logging
+import zipfile
+
 import aiofiles
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -25,15 +29,27 @@ from app.services import (
     TranscriptionError,
     StorageService,
 )
+from app.services.transcription import TranscriptionService
 from app.database import async_session_maker
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def get_transcription_service() -> WhisperAPIService:
-    """Get the transcription service instance."""
-    return WhisperAPIService()
+def get_transcription_service() -> TranscriptionService:
+    """
+    Get the transcription service instance.
+    
+    Returns MockTranscriptionService if USE_MOCK_TRANSCRIPTION=true,
+    otherwise returns WhisperAPIService.
+    """
+    settings = get_settings()
+    
+    if settings.use_mock_transcription:
+        from app.services.mock_transcription import MockTranscriptionService
+        return MockTranscriptionService()
+    else:
+        return WhisperAPIService()
 
 
 async def process_video(
@@ -272,6 +288,41 @@ async def list_transcripts(db: AsyncSession = Depends(get_db)):
         )
         for t in transcripts
     ]
+
+
+@router.get("/transcripts/folder/{batch_id}/download")
+async def download_folder_transcripts(
+    batch_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Download all transcripts of a folder upload as a zip archive.
+    Preserves original folder structure; each transcript is a .txt file.
+    """
+    storage = StorageService(db=db)
+    items = await storage.list_transcripts_by_batch_id_with_content(batch_id)
+
+    if not items:
+        raise HTTPException(
+            status_code=404,
+            detail="No completed transcripts in this folder",
+        )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for metadata, transcript in items:
+            rel_path = metadata.relative_path or metadata.filename
+            zip_path = str(Path(rel_path).with_suffix(".txt"))
+            text = transcript.text or ""
+            zf.writestr(zip_path, text, zipfile.ZIP_DEFLATED)
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="transcripts-{batch_id}.zip"'
+        },
+    )
 
 
 @router.get("/transcripts/{transcript_id}", response_model=TranscriptResponse)

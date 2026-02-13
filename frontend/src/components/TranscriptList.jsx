@@ -1,5 +1,5 @@
 import { useState, useMemo, Fragment } from 'react';
-import { formatDuration } from '../api/client';
+import { formatDuration, downloadFolderTranscripts } from '../api/client';
 
 function StatusBadge({ status }) {
   const displayStatus = status.replace('_', ' ');
@@ -161,6 +161,7 @@ export default function TranscriptList({
       batchId,
       transcripts: list,
       created_at: list[0]?.created_at,
+      completedCount: list.filter((t) => t.status === 'completed').length,
     }));
     batches.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     ind.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -268,14 +269,31 @@ export default function TranscriptList({
           </li>
         ))}
 
-        {batches.map(({ batchId, transcripts: batchTranscripts }) => {
+        {batches.map(({ batchId, transcripts: batchTranscripts, completedCount }) => {
           const tree = buildTree(batchTranscripts);
+          const handleDownload = async (e) => {
+            e.stopPropagation();
+            try {
+              await downloadFolderTranscripts(batchId);
+            } catch (err) {
+              alert(err.message || 'Download failed');
+            }
+          };
           return (
             <Fragment key={batchId}>
               <li className="tree-batch-header">
                 <span className="tree-batch-label">
                   📁 Folder upload ({batchTranscripts.length} file{batchTranscripts.length !== 1 ? 's' : ''})
                 </span>
+                {completedCount > 0 && (
+                  <button
+                    type="button"
+                    className="btn-link"
+                    onClick={handleDownload}
+                  >
+                    Download
+                  </button>
+                )}
               </li>
               <TreeNode
                 node={tree}

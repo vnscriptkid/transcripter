@@ -122,6 +122,38 @@ export async function getTranscript(id) {
 }
 
 /**
+ * Download all transcripts of a folder upload as a zip file.
+ * Preserves original folder structure; each transcript is a .txt file.
+ * @param {string} batchId - Batch ID from folder upload
+ */
+export async function downloadFolderTranscripts(batchId) {
+  const response = await fetch(
+    `${API_BASE}/transcripts/folder/${batchId}/download`
+  );
+
+  if (!response.ok) {
+    let message = 'Download failed';
+    try {
+      const body = await response.json();
+      if (body.detail) {
+        message = typeof body.detail === 'string' ? body.detail : body.detail[0]?.msg || message;
+      }
+    } catch {
+      // ignore JSON parse errors
+    }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `transcripts-${batchId}.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
  * Get the status of a transcript
  * @param {string} id - Transcript ID
  * @returns {Promise<{id: string, status: string, error: string|null}>}
