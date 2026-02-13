@@ -56,18 +56,44 @@ Create `backend/.env.production` template (don't commit secrets)
 #### 1.3 Add Build Scripts
 Create `backend/Dockerfile` and `frontend/Dockerfile` (or use Railway's auto-detection)
 
-### Step 2: Deploy Backend to Railway
+### Step 2: Add PostgreSQL Database to Railway
+
+1. **In your Railway project**, click **"+ New"** → **"Database"** → **"Add PostgreSQL"**
+2. Railway will automatically create a PostgreSQL service
+3. **Note the DATABASE_URL**: Railway automatically sets this as an environment variable
+   - The `DATABASE_URL` will be in format: `postgresql://user:password@host:port/dbname`
+   - Our app automatically converts this to `postgresql+asyncpg://` format for async operations
+
+### Step 3: Deploy Backend to Railway
 
 1. **Sign up/Login to Railway**: https://railway.app
 2. **Create New Project** → "Deploy from GitHub repo"
 3. **Select your repository**
-4. **Configure Backend Service**:
+4. **Add Backend Service**:
+   - Click **"+ New"** → **"GitHub Repo"** → Select your repository
    - Root Directory: `backend`
    - Environment Variables:
      - `OPENAI_API_KEY` = (your OpenAI key)
      - `PORT` = (auto-set by Railway)
+     - `DATABASE_URL` = (automatically set when you connect PostgreSQL service)
+5. **Connect PostgreSQL to Backend**:
+   - In your backend service settings, go to **"Variables"** tab
+   - Railway should automatically detect and link the PostgreSQL service
+   - The `DATABASE_URL` environment variable will be automatically populated
+6. **Run Database Migrations**:
+   - Option A: Add to startup command in Railway:
+     ```bash
+     alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+     ```
+   - Option B: Use Railway CLI to run migrations:
+     ```bash
+     railway run alembic upgrade head
+     ```
+   - Option C: Add a one-time migration service (recommended for production):
+     - Create a new service with command: `alembic upgrade head`
+     - Run it once, then delete the service
 
-### Step 3: Deploy Frontend to Railway
+### Step 4: Deploy Frontend to Railway
 
 1. **Add New Service** → "GitHub Repo" (same repo)
 2. **Configure Frontend Service**:
@@ -77,7 +103,7 @@ Create `backend/Dockerfile` and `frontend/Dockerfile` (or use Railway's auto-det
 3. **Update Frontend API Client**:
    - Modify `frontend/src/api/client.js` to use `import.meta.env.VITE_API_URL || '/api'`
 
-### Step 4: Domain Setup
+### Step 5: Domain Setup
 
 #### Option A: Use Railway Subdomain (Instant)
 - Railway provides: `your-app.up.railway.app`
@@ -108,6 +134,103 @@ Create `backend/Dockerfile` and `frontend/Dockerfile` (or use Railway's auto-det
 4. **Update CORS**:
    - Update backend CORS to include: `https://yourdomain.com`
    - Redeploy backend service
+
+---
+
+## PostgreSQL Database Setup
+
+### Local Development with Docker Compose
+
+The `docker-compose.yml` file includes a PostgreSQL service for local development:
+
+1. **Start services**:
+   ```bash
+   docker-compose up -d
+   ```
+
+2. **Run database migrations**:
+   ```bash
+   docker-compose exec backend alembic upgrade head
+   ```
+
+3. **Database connection**:
+   - Host: `localhost`
+   - Port: `5432`
+   - Database: `transcripter`
+   - User: `postgres`
+   - Password: `postgres`
+   - Connection string: `postgresql+asyncpg://postgres:postgres@localhost:5432/transcripter`
+
+### Railway.app PostgreSQL Setup
+
+Railway.app provides managed PostgreSQL databases:
+
+1. **Add PostgreSQL Service**:
+   - In your Railway project, click **"+ New"** → **"Database"** → **"Add PostgreSQL"**
+   - Railway automatically creates a PostgreSQL instance
+
+2. **Automatic Connection**:
+   - Railway automatically sets the `DATABASE_URL` environment variable
+   - The backend service will automatically connect to PostgreSQL when linked
+   - To link services: Go to backend service → Settings → Variables → Connect PostgreSQL
+
+3. **Database Migrations on Railway**:
+   
+   **Option A: Run migrations on startup** (Recommended for development):
+   - Update Railway start command to:
+     ```bash
+     alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+     ```
+   - This runs migrations every time the service starts
+   
+   **Option B: Use Railway CLI** (Recommended for production):
+   ```bash
+   # Install Railway CLI
+   npm i -g @railway/cli
+   
+   # Login
+   railway login
+   
+   # Link to your project
+   railway link
+   
+   # Run migrations
+   railway run alembic upgrade head
+   ```
+   
+   **Option C: One-time migration service**:
+   - Create a new service with command: `alembic upgrade head`
+   - Run it once, then delete the service
+
+4. **Database Management**:
+   - Access Railway PostgreSQL via Railway dashboard → PostgreSQL service → "Data" tab
+   - Or use Railway CLI: `railway connect postgres`
+   - Or use external tools with connection string from Railway dashboard
+
+5. **Environment Variables**:
+   - `DATABASE_URL` is automatically set by Railway
+   - Format: `postgresql://user:password@host:port/dbname`
+   - Our app automatically converts to `postgresql+asyncpg://` format
+
+### Database Schema
+
+The application uses a single `transcripts` table with the following structure:
+- `id` (String, Primary Key): Unique transcript identifier
+- `filename` (String): Original video filename
+- `relative_path` (String, Optional): Path relative to folder root (for folder uploads)
+- `batch_id` (String, Optional): Groups transcripts from same folder upload
+- `status` (String): Transcription status (pending, extracting_audio, transcribing, completed, failed)
+- `error` (Text, Optional): Error message if transcription failed
+- `duration` (Float, Optional): Video duration in seconds
+- `language` (String, Optional): Detected language code
+- `transcript_content` (JSONB): Full transcript content stored as JSON
+- `created_at` (DateTime): Creation timestamp
+- `updated_at` (DateTime): Last update timestamp
+
+Indexes are created on:
+- `batch_id` (for filtering by batch)
+- `status` (for filtering by status)
+- `created_at` (for sorting)
 
 ---
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import UploadForm from './components/UploadForm';
+import FolderUploadForm from './components/FolderUploadForm';
 import TranscriptList from './components/TranscriptList';
 import TranscriptViewer from './components/TranscriptViewer';
 import { listTranscripts, getTranscript, getTranscriptStatus } from './api/client';
@@ -78,11 +79,17 @@ function App() {
     }
   };
 
-  // Handle upload completion
+  // Handle upload completion (single file)
   const handleUploadComplete = (result) => {
-    // Refresh the list and select the new transcript
     fetchTranscripts();
     loadTranscript(result.id);
+  };
+
+  // Handle folder upload completion
+  const handleFolderUploadComplete = (result) => {
+    fetchTranscripts();
+    const firstId = result.accepted_files?.[0]?.id;
+    if (firstId) loadTranscript(firstId);
   };
 
   return (
@@ -93,6 +100,7 @@ function App() {
       </header>
 
       <UploadForm onUploadComplete={handleUploadComplete} />
+      <FolderUploadForm onUploadComplete={handleFolderUploadComplete} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '1.5rem' }}>
         <TranscriptList

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -9,6 +10,9 @@ class Settings(BaseSettings):
     
     # OpenAI API
     openai_api_key: str = ""
+    
+    # Database - defaults to local PostgreSQL, can be overridden with DATABASE_URL env var
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/transcripter"
     
     # File storage paths
     base_dir: Path = Path(__file__).parent.parent
@@ -26,6 +30,14 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+    
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def convert_database_url(cls, v):
+        """Convert postgresql:// to postgresql+asyncpg:// for asyncpg driver."""
+        if isinstance(v, str) and v.startswith("postgresql://") and "+asyncpg" not in v:
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
 
 @lru_cache()

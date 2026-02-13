@@ -1,11 +1,13 @@
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 import uuid
 
-from app.config import get_settings
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.database import Transcript
 from app.models.schemas import (
     TranscriptMetadata,
     TranscriptResult,
@@ -17,64 +19,87 @@ logger = logging.getLogger(__name__)
 
 class StorageService:
     """
-    Simple file-based storage for transcripts.
+    Database-based storage for transcripts using PostgreSQL.
     
-    Each transcript is stored as:
-    - transcripts/{id}/metadata.json - Metadata about the transcript
-    - transcripts/{id}/transcript.json - The actual transcript content
+    Stores transcript metadata and content in PostgreSQL database.
+    Transcript content is stored as JSONB for efficient querying.
     """
     
-    def __init__(self):
-        self.settings = get_settings()
-        self.transcripts_dir = self.settings.transcripts_dir
+    def __init__(self, db: Optional[AsyncSession] = None):
+        """
+        Initialize storage service.
+        
+        Args:
+            db: Optional database session. If provided, will use this session
+                and won't commit/close it. If None, will create a new session
+                for each operation.
+        """
+        self.db = db
     
     def generate_id(self) -> str:
         """Generate a unique ID for a transcript."""
         return str(uuid.uuid4())[:8]
     
-    def _get_transcript_dir(self, transcript_id: str) -> Path:
-        """Get the directory for a specific transcript."""
-        return self.transcripts_dir / transcript_id
-    
-    def _get_metadata_path(self, transcript_id: str) -> Path:
-        """Get the metadata file path for a transcript."""
-        return self._get_transcript_dir(transcript_id) / "metadata.json"
-    
-    def _get_transcript_path(self, transcript_id: str) -> Path:
-        """Get the transcript file path."""
-        return self._get_transcript_dir(transcript_id) / "transcript.json"
-    
     async def create_transcript(
-        self, 
-        transcript_id: str, 
-        filename: str
+        self,
+        transcript_id: str,
+        filename: str,
+        relative_path: Optional[str] = None,
+        batch_id: Optional[str] = None,
     ) -> TranscriptMetadata:
         """
         Create a new transcript entry with pending status.
-        
+
         Args:
             transcript_id: Unique ID for the transcript
             filename: Original filename of the uploaded video
-            
+            relative_path: Path relative to folder root (for folder uploads)
+            batch_id: Groups transcripts from same folder upload
+
         Returns:
             TranscriptMetadata for the new transcript
         """
-        transcript_dir = self._get_transcript_dir(transcript_id)
-        transcript_dir.mkdir(parents=True, exist_ok=True)
-        
+        if self.db:
+            # Use provided session
+            return await self._create_transcript_in_session(
+                self.db, transcript_id, filename, relative_path, batch_id
+            )
+        else:
+            # Create new session
+            from app.database import async_session_maker
+            async with async_session_maker() as session:
+                return await self._create_transcript_in_session(
+                    session, transcript_id, filename, relative_path, batch_id
+                )
+    
+    async def _create_transcript_in_session(
+        self,
+        session: AsyncSession,
+        transcript_id: str,
+        filename: str,
+        relative_path: Optional[str] = None,
+        batch_id: Optional[str] = None,
+    ) -> TranscriptMetadata:
+        """Internal method to create transcript within a session."""
         now = datetime.utcnow()
-        metadata = TranscriptMetadata(
+        
+        transcript = Transcript(
             id=transcript_id,
             filename=filename,
-            status=TranscriptionStatus.PENDING,
+            status=TranscriptionStatus.PENDING.value,
+            relative_path=relative_path,
+            batch_id=batch_id,
             created_at=now,
             updated_at=now,
         )
         
-        await self._save_metadata(transcript_id, metadata)
+        session.add(transcript)
+        await session.commit()
+        await session.refresh(transcript)
+        
         logger.info(f"Created transcript entry: {transcript_id}")
         
-        return metadata
+        return self._db_to_metadata(transcript)
     
     async def update_status(
         self, 
@@ -83,17 +108,38 @@ class StorageService:
         error: Optional[str] = None
     ) -> TranscriptMetadata:
         """Update the status of a transcript."""
-        metadata = await self.get_metadata(transcript_id)
-        if metadata is None:
+        if self.db:
+            return await self._update_status_in_session(self.db, transcript_id, status, error)
+        else:
+            from app.database import async_session_maker
+            async with async_session_maker() as session:
+                return await self._update_status_in_session(session, transcript_id, status, error)
+    
+    async def _update_status_in_session(
+        self,
+        session: AsyncSession,
+        transcript_id: str,
+        status: TranscriptionStatus,
+        error: Optional[str] = None,
+    ) -> TranscriptMetadata:
+        """Internal method to update status within a session."""
+        result = await session.execute(
+            select(Transcript).where(Transcript.id == transcript_id)
+        )
+        transcript = result.scalar_one_or_none()
+        
+        if transcript is None:
             raise ValueError(f"Transcript not found: {transcript_id}")
         
-        metadata.status = status
-        metadata.updated_at = datetime.utcnow()
+        transcript.status = status.value
+        transcript.updated_at = datetime.utcnow()
         if error:
-            metadata.error = error
+            transcript.error = error
         
-        await self._save_metadata(transcript_id, metadata)
-        return metadata
+        await session.commit()
+        await session.refresh(transcript)
+        
+        return self._db_to_metadata(transcript)
     
     async def save_transcript(
         self, 
@@ -110,72 +156,123 @@ class StorageService:
         Returns:
             Updated metadata
         """
-        transcript_path = self._get_transcript_path(transcript_id)
+        if self.db:
+            return await self._save_transcript_in_session(self.db, transcript_id, result)
+        else:
+            from app.database import async_session_maker
+            async with async_session_maker() as session:
+                return await self._save_transcript_in_session(session, transcript_id, result)
+    
+    async def _save_transcript_in_session(
+        self,
+        session: AsyncSession,
+        transcript_id: str,
+        result: TranscriptResult,
+    ) -> TranscriptMetadata:
+        """Internal method to save transcript within a session."""
+        db_result = await session.execute(
+            select(Transcript).where(Transcript.id == transcript_id)
+        )
+        transcript = db_result.scalar_one_or_none()
         
-        # Save transcript content
-        with open(transcript_path, "w") as f:
-            json.dump(result.model_dump(), f, indent=2)
+        if transcript is None:
+            raise ValueError(f"Transcript not found: {transcript_id}")
         
-        # Update metadata
-        metadata = await self.get_metadata(transcript_id)
-        if metadata:
-            metadata.status = TranscriptionStatus.COMPLETED
-            metadata.updated_at = datetime.utcnow()
-            metadata.duration = result.duration
-            metadata.language = result.language
-            await self._save_metadata(transcript_id, metadata)
+        # Save transcript content as JSONB
+        transcript.transcript_content = result.model_dump()
+        transcript.status = TranscriptionStatus.COMPLETED.value
+        transcript.updated_at = datetime.utcnow()
+        transcript.duration = result.duration
+        transcript.language = result.language
+        
+        await session.commit()
+        await session.refresh(transcript)
         
         logger.info(f"Saved transcript: {transcript_id}")
-        return metadata
+        return self._db_to_metadata(transcript)
     
     async def get_metadata(self, transcript_id: str) -> Optional[TranscriptMetadata]:
         """Get metadata for a transcript."""
-        metadata_path = self._get_metadata_path(transcript_id)
+        if self.db:
+            return await self._get_metadata_in_session(self.db, transcript_id)
+        else:
+            from app.database import async_session_maker
+            async with async_session_maker() as session:
+                return await self._get_metadata_in_session(session, transcript_id)
+    
+    async def _get_metadata_in_session(
+        self,
+        session: AsyncSession,
+        transcript_id: str,
+    ) -> Optional[TranscriptMetadata]:
+        """Internal method to get metadata within a session."""
+        result = await session.execute(
+            select(Transcript).where(Transcript.id == transcript_id)
+        )
+        transcript = result.scalar_one_or_none()
         
-        if not metadata_path.exists():
+        if transcript is None:
             return None
         
-        with open(metadata_path, "r") as f:
-            data = json.load(f)
-        
-        return TranscriptMetadata(**data)
+        return self._db_to_metadata(transcript)
     
     async def get_transcript(self, transcript_id: str) -> Optional[TranscriptResult]:
         """Get the transcript content."""
-        transcript_path = self._get_transcript_path(transcript_id)
+        if self.db:
+            return await self._get_transcript_in_session(self.db, transcript_id)
+        else:
+            from app.database import async_session_maker
+            async with async_session_maker() as session:
+                return await self._get_transcript_in_session(session, transcript_id)
+    
+    async def _get_transcript_in_session(
+        self,
+        session: AsyncSession,
+        transcript_id: str,
+    ) -> Optional[TranscriptResult]:
+        """Internal method to get transcript within a session."""
+        result = await session.execute(
+            select(Transcript).where(Transcript.id == transcript_id)
+        )
+        transcript = result.scalar_one_or_none()
         
-        if not transcript_path.exists():
+        if transcript is None or transcript.transcript_content is None:
             return None
         
-        with open(transcript_path, "r") as f:
-            data = json.load(f)
-        
-        return TranscriptResult(**data)
+        return TranscriptResult(**transcript.transcript_content)
     
     async def list_transcripts(self) -> list[TranscriptMetadata]:
-        """List all transcripts."""
-        transcripts = []
-        
-        if not self.transcripts_dir.exists():
-            return transcripts
-        
-        for transcript_dir in self.transcripts_dir.iterdir():
-            if transcript_dir.is_dir():
-                metadata = await self.get_metadata(transcript_dir.name)
-                if metadata:
-                    transcripts.append(metadata)
-        
-        # Sort by created_at descending (newest first)
-        transcripts.sort(key=lambda x: x.created_at, reverse=True)
-        return transcripts
+        """List all transcripts, sorted by created_at descending (newest first)."""
+        if self.db:
+            return await self._list_transcripts_in_session(self.db)
+        else:
+            from app.database import async_session_maker
+            async with async_session_maker() as session:
+                return await self._list_transcripts_in_session(session)
     
-    async def _save_metadata(
-        self, 
-        transcript_id: str, 
-        metadata: TranscriptMetadata
-    ) -> None:
-        """Save metadata to file."""
-        metadata_path = self._get_metadata_path(transcript_id)
+    async def _list_transcripts_in_session(
+        self,
+        session: AsyncSession,
+    ) -> list[TranscriptMetadata]:
+        """Internal method to list transcripts within a session."""
+        result = await session.execute(
+            select(Transcript).order_by(Transcript.created_at.desc())
+        )
+        transcripts = result.scalars().all()
         
-        with open(metadata_path, "w") as f:
-            json.dump(metadata.model_dump(mode='json'), f, indent=2, default=str)
+        return [self._db_to_metadata(t) for t in transcripts]
+    
+    def _db_to_metadata(self, transcript: Transcript) -> TranscriptMetadata:
+        """Convert database model to Pydantic metadata model."""
+        return TranscriptMetadata(
+            id=transcript.id,
+            filename=transcript.filename,
+            status=TranscriptionStatus(transcript.status),
+            created_at=transcript.created_at,
+            updated_at=transcript.updated_at,
+            duration=transcript.duration,
+            language=transcript.language,
+            error=transcript.error,
+            relative_path=transcript.relative_path,
+            batch_id=transcript.batch_id,
+        )

@@ -324,3 +324,88 @@ h2 {
   padding: 0.5rem 1rem;
   font-size: 0.85rem;
 }
+
+/* Transcript list header with tree actions */
+.transcript-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.transcript-list-header h2 {
+  margin-bottom: 0;
+}
+
+.tree-actions {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.tree-actions-sep {
+  margin: 0 0.5rem;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+}
+
+/* Tree folder */
+.tree-folder-item {
+  list-style: none;
+}
+
+.tree-folder-header {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.tree-folder-header:hover {
+  background-color: var(--secondary);
+}
+
+.tree-chevron {
+  display: inline-block;
+  width: 1rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.tree-folder-name {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.tree-children {
+  border-left: 1px solid var(--border);
+  margin-left: 0.5rem;
+}
+
+.tree-batch-header {
+  list-style: none;
+  padding: 0.75rem 1rem;
+  background-color: var(--secondary);
+  border-radius: 8px;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.tree-batch-label {
+  display: block;
+}

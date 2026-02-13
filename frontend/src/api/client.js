@@ -44,6 +44,52 @@ export async function uploadVideo(file, onProgress) {
 }
 
 /**
+ * Upload a folder of video files for transcription
+ * @param {File[]} files - Video files from folder selection (with webkitRelativePath)
+ * @param {string[]} relativePaths - Paths from file.webkitRelativePath, same order as files
+ * @param {function} onProgress - Progress callback (0-100), approximate
+ * @returns {Promise<{batch_id: string, accepted_count: number, skipped_count: number, accepted_files: Array}>}
+ */
+export async function uploadFolder(files, relativePaths, onProgress) {
+  const formData = new FormData();
+  formData.append('relative_paths', JSON.stringify(relativePaths));
+  for (const file of files) {
+    formData.append('files', file);
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable && onProgress) {
+        const progress = Math.round((event.loaded / event.total) * 100);
+        onProgress(progress);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        try {
+          const error = JSON.parse(xhr.responseText);
+          reject(new Error(error.detail || 'Folder upload failed'));
+        } catch {
+          reject(new Error('Folder upload failed'));
+        }
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      reject(new Error('Network error'));
+    });
+
+    xhr.open('POST', `${API_BASE}/upload-folder`);
+    xhr.send(formData);
+  });
+}
+
+/**
  * Get list of all transcripts
  * @returns {Promise<Array>}
  */

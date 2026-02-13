@@ -38,6 +38,8 @@ class TranscriptMetadata(BaseModel):
     duration: Optional[float] = None
     language: Optional[str] = None
     error: Optional[str] = None
+    relative_path: Optional[str] = None  # Path relative to folder root (folder uploads)
+    batch_id: Optional[str] = None  # Groups transcripts from same folder upload
 
 
 class TranscriptResponse(BaseModel):
@@ -67,3 +69,20 @@ class TranscriptListItem(BaseModel):
     status: TranscriptionStatus
     created_at: datetime
     duration: Optional[float] = None
+    relative_path: Optional[str] = None
+    batch_id: Optional[str] = None
+
+
+class FolderUploadAcceptedFile(BaseModel):
+    """Accepted file in folder upload response."""
+    id: str
+    relative_path: str
+
+
+class FolderUploadResponse(BaseModel):
+    """Response after uploading a folder."""
+    batch_id: str
+    message: str
+    accepted_count: int
+    skipped_count: int
+    accepted_files: list[FolderUploadAcceptedFile]

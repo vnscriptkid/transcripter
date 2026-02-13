@@ -27,11 +27,13 @@ export default function TranscriptViewer({ transcript, metadata }) {
     }
   };
 
+  const displayName = metadata.relative_path || metadata.filename;
+
   return (
     <div className="card transcript-viewer">
       <div className="transcript-header">
         <div>
-          <h2>{metadata.filename}</h2>
+          <h2>{displayName}</h2>
           <div className="transcript-meta">
             {metadata.language && <span>Language: {metadata.language}</span>}
             {metadata.duration && (
