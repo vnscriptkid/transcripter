@@ -90,16 +90,22 @@ export async function uploadFolder(files, relativePaths, onProgress) {
 }
 
 /**
- * Get list of all transcripts
- * @returns {Promise<Array>}
+ * Get paginated transcript groups
+ * @param {Object} options
+ * @param {number} options.limit - Max groups per page (default 20)
+ * @param {string|null} options.cursor - ISO timestamp cursor for next page
+ * @returns {Promise<{groups: Array, next_cursor: string|null, has_more: boolean}>}
  */
-export async function listTranscripts() {
-  const response = await fetch(`${API_BASE}/transcripts`);
-  
+export async function listTranscriptGroups({ limit = 20, cursor = null } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) params.set('cursor', cursor);
+
+  const response = await fetch(`${API_BASE}/transcripts?${params}`);
+
   if (!response.ok) {
     throw new Error('Failed to fetch transcripts');
   }
-  
+
   return response.json();
 }
 
@@ -160,11 +166,25 @@ export async function downloadFolderTranscripts(batchId) {
  */
 export async function getTranscriptStatus(id) {
   const response = await fetch(`${API_BASE}/transcripts/${id}/status`);
-  
+
   if (!response.ok) {
     throw new Error('Failed to fetch status');
   }
-  
+
+  return response.json();
+}
+
+/**
+ * Get statuses of all in-progress transcripts (bulk polling)
+ * @returns {Promise<{transcripts: Array<{id: string, status: string, batch_id: string|null}>}>}
+ */
+export async function getInProgressStatuses() {
+  const response = await fetch(`${API_BASE}/transcripts/status/in-progress`);
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch in-progress statuses');
+  }
+
   return response.json();
 }
 

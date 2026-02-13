@@ -86,3 +86,30 @@ class FolderUploadResponse(BaseModel):
     accepted_count: int
     skipped_count: int
     accepted_files: list[FolderUploadAcceptedFile]
+
+
+class TranscriptGroup(BaseModel):
+    """A logical group: either a single transcript or a batch."""
+    group_type: str  # "individual" or "batch"
+    batch_id: Optional[str] = None
+    created_at: datetime
+    transcripts: list[TranscriptListItem]
+
+
+class PaginatedTranscriptGroupsResponse(BaseModel):
+    """Paginated response of transcript groups."""
+    groups: list[TranscriptGroup]
+    next_cursor: Optional[str] = None
+    has_more: bool
+
+
+class InProgressStatusItem(BaseModel):
+    """Lightweight status for an in-progress transcript."""
+    id: str
+    status: TranscriptionStatus
+    batch_id: Optional[str] = None
+
+
+class InProgressResponse(BaseModel):
+    """Response for bulk in-progress status check."""
+    transcripts: list[InProgressStatusItem]

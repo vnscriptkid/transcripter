@@ -138,49 +138,32 @@ function formatDate(dateString) {
 }
 
 export default function TranscriptList({
-  transcripts,
+  groups,
   selectedId,
   onSelect,
   isLoading,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
 }) {
   const [expandedFolders, setExpandedFolders] = useState(new Set());
 
-  const { individual, batches, hasFolderNodes } = useMemo(() => {
-    const ind = [];
-    const batchMap = new Map();
-    for (const t of transcripts) {
-      if (t.batch_id) {
-        const list = batchMap.get(t.batch_id) || [];
-        list.push(t);
-        batchMap.set(t.batch_id, list);
-      } else {
-        ind.push(t);
-      }
-    }
-    const batches = Array.from(batchMap.entries()).map(([batchId, list]) => ({
-      batchId,
-      transcripts: list,
-      created_at: list[0]?.created_at,
-      completedCount: list.filter((t) => t.status === 'completed').length,
-    }));
-    batches.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    ind.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-    let hasFolderNodes = false;
-    for (const b of batches) {
-      const tree = buildTree(b.transcripts);
+  const hasFolderNodes = useMemo(() => {
+    for (const group of groups) {
+      if (group.group_type !== 'batch') continue;
+      const tree = buildTree(group.transcripts);
       const check = (node) => {
-        if (node.type === 'folder' && node.path && node.children?.length > 0) {
-          hasFolderNodes = true;
-          return;
-        }
-        node.children?.forEach(check);
+        if (node.type === 'folder' && node.path && node.children?.length > 0) return true;
+        return node.children?.some(check) || false;
       };
-      check(tree);
+      if (check(tree)) return true;
     }
+    return false;
+  }, [groups]);
 
-    return { individual: ind, batches, hasFolderNodes };
-  }, [transcripts]);
+  const hasBatches = groups.some((g) => g.group_type === 'batch');
+
+  const totalTranscripts = groups.reduce((sum, g) => sum + g.transcripts.length, 0);
 
   const toggleFolder = (path) => {
     setExpandedFolders((prev) => {
@@ -197,9 +180,11 @@ export default function TranscriptList({
       if (node.type === 'folder' && node.path) paths.add(node.path);
       node.children?.forEach(collectPaths);
     };
-    batches.forEach((b) => {
-      const tree = buildTree(b.transcripts);
-      collectPaths(tree);
+    groups.forEach((g) => {
+      if (g.group_type === 'batch') {
+        const tree = buildTree(g.transcripts);
+        collectPaths(tree);
+      }
     });
     setExpandedFolders(paths);
   };
@@ -218,7 +203,7 @@ export default function TranscriptList({
     );
   }
 
-  if (transcripts.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="card">
         <h2>Transcripts</h2>
@@ -235,8 +220,8 @@ export default function TranscriptList({
   return (
     <div className="card">
       <div className="transcript-list-header">
-        <h2>Transcripts ({transcripts.length})</h2>
-        {batches.length > 0 && hasFolderNodes && (
+        <h2>Transcripts ({totalTranscripts})</h2>
+        {hasBatches && hasFolderNodes && (
           <div className="tree-actions">
             <button type="button" className="btn-link" onClick={expandAll}>
               Expand all
@@ -250,37 +235,44 @@ export default function TranscriptList({
       </div>
 
       <ul className="transcript-list">
-        {individual.map((transcript) => (
-          <li
-            key={transcript.id}
-            className={`transcript-item ${selectedId === transcript.id ? 'selected' : ''}`}
-            onClick={() => onSelect(transcript.id)}
-          >
-            <div className="transcript-info">
-              <div className="transcript-filename">{transcript.filename}</div>
-              <div className="transcript-meta">
-                {formatDate(transcript.created_at)}
-                {transcript.duration != null && (
-                  <> • {formatDuration(transcript.duration)}</>
-                )}
-              </div>
-            </div>
-            <StatusBadge status={transcript.status} />
-          </li>
-        ))}
+        {groups.map((group) => {
+          if (group.group_type === 'individual') {
+            const t = group.transcripts[0];
+            return (
+              <li
+                key={t.id}
+                className={`transcript-item ${selectedId === t.id ? 'selected' : ''}`}
+                onClick={() => onSelect(t.id)}
+              >
+                <div className="transcript-info">
+                  <div className="transcript-filename">{t.filename}</div>
+                  <div className="transcript-meta">
+                    {formatDate(t.created_at)}
+                    {t.duration != null && (
+                      <> • {formatDuration(t.duration)}</>
+                    )}
+                  </div>
+                </div>
+                <StatusBadge status={t.status} />
+              </li>
+            );
+          }
 
-        {batches.map(({ batchId, transcripts: batchTranscripts, completedCount }) => {
+          // Batch group
+          const batchTranscripts = group.transcripts;
           const tree = buildTree(batchTranscripts);
+          const completedCount = batchTranscripts.filter((t) => t.status === 'completed').length;
           const handleDownload = async (e) => {
             e.stopPropagation();
             try {
-              await downloadFolderTranscripts(batchId);
+              await downloadFolderTranscripts(group.batch_id);
             } catch (err) {
               alert(err.message || 'Download failed');
             }
           };
+
           return (
-            <Fragment key={batchId}>
+            <Fragment key={group.batch_id}>
               <li className="tree-batch-header">
                 <span className="tree-batch-label">
                   📁 Folder upload ({batchTranscripts.length} file{batchTranscripts.length !== 1 ? 's' : ''})
@@ -306,6 +298,19 @@ export default function TranscriptList({
             </Fragment>
           );
         })}
+
+        {hasMore && (
+          <li className="load-more-item" style={{ textAlign: 'center', padding: '0.75rem' }}>
+            <button
+              type="button"
+              className="btn-link"
+              onClick={onLoadMore}
+              disabled={isLoadingMore}
+            >
+              {isLoadingMore ? 'Loading...' : 'Load more'}
+            </button>
+          </li>
+        )}
       </ul>
     </div>
   );

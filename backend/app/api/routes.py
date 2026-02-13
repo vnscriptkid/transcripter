@@ -16,7 +16,10 @@ from app.database import get_db
 from app.models.schemas import (
     TranscriptionStatus,
     TranscriptResponse,
-    TranscriptListItem,
+    TranscriptGroup,
+    PaginatedTranscriptGroupsResponse,
+    InProgressStatusItem,
+    InProgressResponse,
     UploadResponse,
     StatusResponse,
     FolderUploadResponse,
@@ -270,24 +273,43 @@ async def upload_folder(
     )
 
 
-@router.get("/transcripts", response_model=list[TranscriptListItem])
-async def list_transcripts(db: AsyncSession = Depends(get_db)):
-    """List all transcripts."""
+@router.get("/transcripts", response_model=PaginatedTranscriptGroupsResponse)
+async def list_transcripts(
+    limit: int = 20,
+    cursor: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List transcript groups with cursor-based pagination."""
+    from datetime import datetime as dt
+
+    cursor_dt = None
+    if cursor:
+        try:
+            cursor_dt = dt.fromisoformat(cursor)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid cursor format")
+
     storage = StorageService(db=db)
-    transcripts = await storage.list_transcripts()
-    
-    return [
-        TranscriptListItem(
-            id=t.id,
-            filename=t.filename,
-            status=t.status,
-            created_at=t.created_at,
-            duration=t.duration,
-            relative_path=t.relative_path,
-            batch_id=t.batch_id,
-        )
-        for t in transcripts
-    ]
+    groups, next_cursor, has_more = await storage.list_transcript_groups(
+        limit=max(1, min(limit, 100)),
+        cursor=cursor_dt,
+    )
+
+    return PaginatedTranscriptGroupsResponse(
+        groups=[TranscriptGroup(**g) for g in groups],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
+@router.get("/transcripts/status/in-progress", response_model=InProgressResponse)
+async def list_in_progress(db: AsyncSession = Depends(get_db)):
+    """Get status of all in-progress transcripts (for polling)."""
+    storage = StorageService(db=db)
+    items = await storage.list_in_progress()
+    return InProgressResponse(
+        transcripts=[InProgressStatusItem(**item) for item in items]
+    )
 
 
 @router.get("/transcripts/folder/{batch_id}/download")

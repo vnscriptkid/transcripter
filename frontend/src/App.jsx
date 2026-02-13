@@ -3,21 +3,26 @@ import UploadForm from './components/UploadForm';
 import FolderUploadForm from './components/FolderUploadForm';
 import TranscriptList from './components/TranscriptList';
 import TranscriptViewer from './components/TranscriptViewer';
-import { listTranscripts, getTranscript, getTranscriptStatus } from './api/client';
+import { listTranscriptGroups, getTranscript, getInProgressStatuses } from './api/client';
 
 function App() {
-  const [transcripts, setTranscripts] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [selectedTranscript, setSelectedTranscript] = useState(null);
   const [selectedMetadata, setSelectedMetadata] = useState(null);
   const [isLoadingList, setIsLoadingList] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
 
-  // Fetch transcripts list
-  const fetchTranscripts = useCallback(async () => {
+  // Fetch initial page of groups
+  const fetchInitialGroups = useCallback(async () => {
     try {
-      const data = await listTranscripts();
-      setTranscripts(data);
+      const data = await listTranscriptGroups({ limit: 20 });
+      setGroups(data.groups);
+      setNextCursor(data.next_cursor);
+      setHasMore(data.has_more);
     } catch (err) {
       console.error('Failed to fetch transcripts:', err);
     } finally {
@@ -27,47 +32,89 @@ function App() {
 
   // Initial load
   useEffect(() => {
-    fetchTranscripts();
-  }, [fetchTranscripts]);
+    fetchInitialGroups();
+  }, [fetchInitialGroups]);
 
-  // Poll for updates when there are processing transcripts
+  // Load more groups (next page)
+  const loadMore = useCallback(async () => {
+    if (!hasMore || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const data = await listTranscriptGroups({ limit: 20, cursor: nextCursor });
+      setGroups(prev => [...prev, ...data.groups]);
+      setNextCursor(data.next_cursor);
+      setHasMore(data.has_more);
+    } catch (err) {
+      console.error('Failed to load more transcripts:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [hasMore, isLoadingMore, nextCursor]);
+
+  // Poll for status updates on in-progress transcripts
   useEffect(() => {
-    const processingTranscripts = transcripts.filter(t => 
-      ['pending', 'extracting_audio', 'transcribing'].includes(t.status)
-    );
-
-    if (processingTranscripts.length === 0) return;
-
-    const interval = setInterval(async () => {
-      // Check status of processing transcripts
-      const updates = await Promise.all(
-        processingTranscripts.map(t => getTranscriptStatus(t.id).catch(() => null))
-      );
-
-      let needsRefresh = false;
-      updates.forEach((update, index) => {
-        if (update && update.status !== processingTranscripts[index].status) {
-          needsRefresh = true;
-        }
-      });
-
-      if (needsRefresh) {
-        fetchTranscripts();
-        // Also refresh selected transcript if it was processing
-        if (selectedId && processingTranscripts.some(t => t.id === selectedId)) {
-          loadTranscript(selectedId);
+    // Collect in-progress transcript ids from current groups
+    const inProgressIds = new Set();
+    for (const group of groups) {
+      for (const t of group.transcripts) {
+        if (['pending', 'extracting_audio', 'transcribing'].includes(t.status)) {
+          inProgressIds.add(t.id);
         }
       }
-    }, 3000); // Poll every 3 seconds
+    }
+
+    if (inProgressIds.size === 0) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const { transcripts: statuses } = await getInProgressStatuses();
+        const statusMap = new Map(statuses.map(s => [s.id, s.status]));
+
+        // Check if any tracked transcript changed status
+        let changed = false;
+        for (const id of inProgressIds) {
+          const newStatus = statusMap.get(id);
+          // If missing from in-progress list, it completed or failed
+          if (!newStatus) {
+            changed = true;
+            break;
+          }
+          // Check against current state
+          for (const group of groups) {
+            const t = group.transcripts.find(tr => tr.id === id);
+            if (t && t.status !== newStatus) {
+              changed = true;
+              break;
+            }
+          }
+          if (changed) break;
+        }
+
+        if (changed) {
+          // Re-fetch initial page to pick up updated statuses
+          const data = await listTranscriptGroups({ limit: 20 });
+          setGroups(data.groups);
+          setNextCursor(data.next_cursor);
+          setHasMore(data.has_more);
+
+          // Refresh selected transcript if it was processing
+          if (selectedId && inProgressIds.has(selectedId)) {
+            loadTranscript(selectedId);
+          }
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [transcripts, selectedId, fetchTranscripts]);
+  }, [groups, selectedId]);
 
   // Load a specific transcript
   const loadTranscript = async (id) => {
     setSelectedId(id);
     setIsLoadingTranscript(true);
-    
+
     try {
       const data = await getTranscript(id);
       setSelectedMetadata(data.metadata);
@@ -81,13 +128,13 @@ function App() {
 
   // Handle upload completion (single file)
   const handleUploadComplete = (result) => {
-    fetchTranscripts();
+    fetchInitialGroups();
     loadTranscript(result.id);
   };
 
   // Handle folder upload completion
   const handleFolderUploadComplete = (result) => {
-    fetchTranscripts();
+    fetchInitialGroups();
     const firstId = result.accepted_files?.[0]?.id;
     if (firstId) loadTranscript(firstId);
   };
@@ -104,10 +151,13 @@ function App() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '1.5rem' }}>
         <TranscriptList
-          transcripts={transcripts}
+          groups={groups}
           selectedId={selectedId}
           onSelect={loadTranscript}
           isLoading={isLoadingList}
+          hasMore={hasMore}
+          isLoadingMore={isLoadingMore}
+          onLoadMore={loadMore}
         />
 
         {isLoadingTranscript ? (
